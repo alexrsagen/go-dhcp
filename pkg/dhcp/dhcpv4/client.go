@@ -50,28 +50,28 @@ func (c *Client) init() error {
 // Discover broadcasts a single DHCPDISCOVER request and returns DHCPOFFER replies
 func (c *Client) Discover() ([]*Packet, error) {
 	if err := c.init(); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("Client.init: %v", err)
 	}
 
 	xid, err := rand.Int(rand.Reader, big.NewInt(math.MaxUint32))
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("rand.Int: %v", err)
 	}
 
 	p := &Packet{
-		op:    OpRequest,
-		htype: HardwareTypeEthernet,
-		hlen:  uint8(len(c.Interface.HardwareAddr)),
-		xid:   uint32(xid.Uint64()),
-		flags: flagBroadcast,
+		Operation:      OpRequest,
+		HardwareType:   HardwareTypeEthernet,
+		HardwareLength: uint8(len(c.Interface.HardwareAddr)),
+		TransactionID:  uint32(xid.Uint64()),
+		Flags:          flagBroadcast,
 	}
-	copy(p.chaddr[:], c.Interface.HardwareAddr)
+	copy(p.ClientHardwareAddress[:], c.Interface.HardwareAddr)
 	c.Options[OptionMessageType] = MessageTypeDiscover
 	p.SetOptions(c.Options)
 
 	srcIP, err := findSourceIPv4(c.Interface)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("findSourceIPv4: %v", err)
 	}
 
 	fmt.Printf("[debug] Starting DHCP client on interface %s with IP %s\n", c.Interface.HardwareAddr.String(), srcIP)
@@ -81,12 +81,12 @@ func (c *Client) Discover() ([]*Packet, error) {
 		Port: portClient,
 	}, c.Interface)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("ifnet.ListenUDP: %v", err)
 	}
 
 	bytes, err := p.toBytes()
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("packet.toBytes: %v", err)
 	}
 
 	var tries uint8
@@ -97,23 +97,39 @@ func (c *Client) Discover() ([]*Packet, error) {
 		Port: portServer,
 	})
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("ifnet.UDPConn.WriteToUDP: %v", err)
 	}
 	fmt.Printf("[debug] Broadcasted %d bytes\n", n)
 
-	var data [dhcpMaxPacketSize]byte
+	data := make([]byte, dhcpMaxPacketSize)
+	responses := []*Packet{}
 
 	for tries = 0; tries < 1+c.MaxReadRetries; tries++ {
-		n, src, err := ln.ReadFromUDP(data[:dhcpMaxPacketSize])
+		if tries > 0 {
+			// clear buffer
+			for i := 0; i < n; i++ {
+				data[i] = 0
+			}
+		}
+
+		// read packet
+		n, src, err := ln.ReadFromUDP(data)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("ifnet.UDPConn.ReadFromUDP: %v", err)
 		}
 		if n == 0 {
 			fmt.Printf("[debug] Received empty packet from %s\n", src)
 			continue
 		}
 		fmt.Printf("[debug] Received %d bytes from %s: %x\n", n, src, data[:n])
+
+		// parse packet
+		resp, err := parsePacket(data)
+		if err != nil {
+			return nil, fmt.Errorf("parsePacket: %v", err)
+		}
+		responses = append(responses, resp)
 	}
 
-	return nil, nil
+	return responses, nil
 }
