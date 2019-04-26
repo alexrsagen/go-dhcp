@@ -24,9 +24,7 @@ func (c *UDPConn) Close() error {
 func (c *UDPConn) WriteToUDP(p []byte, raddr *net.UDPAddr) (int, error) {
 	buf := &syscall.WSABuf{
 		Len: uint32(len(p)),
-	}
-	if len(p) > 0 {
-		buf.Buf = &p[0]
+		Buf: &p[0],
 	}
 
 	var sent uint32
@@ -38,12 +36,15 @@ func (c *UDPConn) WriteToUDP(p []byte, raddr *net.UDPAddr) (int, error) {
 }
 
 func (c *UDPConn) ReadFromUDP(b []byte) (int, *net.UDPAddr, error) {
-	bufs := make([]syscall.WSABuf, 1)
-	var src syscall.RawSockaddrAny
+	buf := &syscall.WSABuf{
+		Len: uint32(len(b)),
+		Buf: &b[0],
+	}
 	var recvd, flags uint32
-	var srclen int32
+	src := &syscall.RawSockaddrAny{}
+	srclen := int32(unsafe.Sizeof(*src))
 
-	if err := syscall.WSARecvFrom(c.fd, &bufs[0], 1, &recvd, &flags, &src, &srclen, nil, nil); err != nil {
+	if err := syscall.WSARecvFrom(c.fd, buf, 1, &recvd, &flags, src, &srclen, nil, nil); err != nil {
 		return 0, nil, err
 	}
 
@@ -55,15 +56,6 @@ func (c *UDPConn) ReadFromUDP(b []byte) (int, *net.UDPAddr, error) {
 	if _, ok := addr.(*net.UDPAddr); !ok {
 		return 0, nil, errors.New("invalid source address")
 	}
-
-	if cap(b) < int(recvd) {
-		return 0, addr.(*net.UDPAddr), errors.New("buffer too small")
-	}
-	sl := struct {
-		addr     uintptr
-		len, cap int
-	}{uintptr(unsafe.Pointer(bufs[0].Buf)), int(bufs[0].Len), int(bufs[0].Len)}
-	copy(b, *(*[]byte)(unsafe.Pointer(&sl)))
 
 	return int(recvd), addr.(*net.UDPAddr), nil
 }
